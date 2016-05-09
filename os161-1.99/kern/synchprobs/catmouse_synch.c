@@ -10,18 +10,11 @@ static struct lock *globalCatMouseLock; // global starter lock
 static struct cv *cv_cat; // control: cat allowed to eat
 static struct cv *cv_mouse; // control: mouse allowed to eat
 
-// Adding all logical variables right now... can trim back as needed
 static int numBowls;  // Keep track of total bowls
-/*
-static int closedBowls; // Keep track of bowls being unused
-static int openBowls; // Keep track of bowls NOT being used
-static int catsWaiting; // keep track of how many cats are hungry
-static int miceWaiting; // keep track of how many mice are hungry
-*/
 static int catsEating;  // keep track of how many cats are eating
 static int miceEating;  // keep track of how many mice are eating
 
-static struct cv **bowlCVs;
+static struct cv **bowlCVs;   // CV for handling animal lines fo each bowl
 static struct lock **bowlLocks; // one lock for each bowl that is created
 static volatile char *bowlStatus; // keeps status of the bowl:
                                   // M: mouse is eating
@@ -71,6 +64,7 @@ catmouse_sync_init(int bowls) {
                                             // same-type animals waiting for same bowl
   }
 
+  // Init # animals eating
   catsEating = 0;
   miceEating = 0;
 
@@ -88,6 +82,7 @@ catmouse_sync_init(int bowls) {
 void
 catmouse_sync_cleanup(int bowls)
 {
+  // Just cleaning everything up here
   KASSERT(globalCatMouseLock != NULL);  lock_destroy(globalCatMouseLock);
   KASSERT(cv_cat != NULL); cv_destroy(cv_cat);
   KASSERT(cv_mouse != NULL); cv_destroy(cv_mouse);
@@ -209,7 +204,7 @@ mouse_before_eating(unsigned int bowl) {
                                               // until this bowl is open
   }
 
-  if (debug) kprintf("Mouse started eating at bowl %d\n", bowl);
+  if (debug) kprintf("Mouse started eating at bowl %d\n", bowl + 1);
   bowlStatus[bowl] = 'M';         // dinner is served
   miceEating++;
   lock_release(bowlLocks[bowl]);  // let another mouse get in line
