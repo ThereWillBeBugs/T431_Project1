@@ -120,20 +120,18 @@ cat_before_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(globalCatMouseLock); // Grab the mutex
-  if (miceEating > 0 || bowlStatus[bowl] == 'C') {   // While there is a mouse eating
-                                                        // OR there is another cat at this bowl
+  while (bowlStatus[bowl] == 'C' || miceEating>0) {   // While there is a mouse eating                                                    // OR there is another cat at this bowl
     if (debug) { // Debug info
       if (miceEating > 0) kprintf("Cat waiting at bowl %d: mouse is eating right now! \n", bowl);
-      if (bowlStatus[bowl] == 'C') kprintf("Cat waiting at bowl %d: cat is eating at this bowl right now! \n", bowl);
     }
     cv_wait(cv_can_eat, globalCatMouseLock);  // conditionally release mutex                                        // until we are allowed to feed this cat
   }
   lock_acquire(bowlLocks[bowl]);  // reserve this table for the cat
-  if (debug) kprintf("Cat started eating at bowl %d\n", bowl);
   bowlStatus[bowl] = 'C';         // dinner is served
   catsEating++;
   lock_release(bowlLocks[bowl]);  // table secured, go ahead and release the lock while the cat chows down
   lock_release(globalCatMouseLock);
+  if (debug) kprintf("Cat started eating at bowl %d\n", bowl);
 }
 
 /*
@@ -152,15 +150,16 @@ cat_before_eating(unsigned int bowl) {
 void
 cat_after_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
-  lock_acquire(globalCatMouseLock);
+
   lock_acquire(bowlLocks[bowl]);
-  if (debug) kprintf("Cat finished eating at bowl %d\n", bowl);
   bowlStatus[bowl] = 'U'; // cat finished eating
-  catsEating--;
   lock_release(bowlLocks[bowl]);
-  if (catsEating == 0)   // Check if this was the last cat
-    cv_signal(cv_can_eat, globalCatMouseLock); // Alert the hungry mice
+  lock_acquire(globalCatMouseLock);
+  catsEating--;
+    // Check if this was the last cat
+  cv_broadcast(cv_can_eat, globalCatMouseLock); // Alert the hungry mice
   lock_release(globalCatMouseLock);
+  if (debug) kprintf("Cat finished eating at bowl %d\n", bowl);
 
 }
 
@@ -181,22 +180,21 @@ mouse_before_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(globalCatMouseLock); // Grab the mutex
-  if (catsEating > 0 || bowlStatus[bowl] == 'M') {   // While there is a cat eating
-                                                        // OR another mouse at this bowl
+  while( bowlStatus[bowl] == 'M'|| catsEating>0) {   // While there is a cat eating
+                                                         // OR another mouse at this bowl
     if (debug) { // Debug info
       if (catsEating > 0) kprintf("Mouse waiting at bowl %d: cat is eating right now! \n", bowl);
-      if (bowlStatus[bowl] == 'M') kprintf("Mouse waiting at bowl %d: mouse is eating at this bowl right now! \n", bowl);
     }
 
     cv_wait(cv_can_eat, globalCatMouseLock);  // conditionally release mutex
                                             // until we are allowed to feed this mouse
   }
   lock_acquire(bowlLocks[bowl]);  // reserve this table for the mouse
-  if (debug) kprintf("Mouse started eating at bowl %d\n", bowl);
   bowlStatus[bowl] = 'M';         // dinner is served
   miceEating++;
   lock_release(bowlLocks[bowl]);  // table secured, go ahead and release the lock while the mouse chows down
   lock_release(globalCatMouseLock);
+  if (debug) kprintf("Mouse started eating at bowl %d\n", bowl);
 }
 
 /*
@@ -217,12 +215,12 @@ mouse_after_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(bowlLocks[bowl]);
-  lock_acquire(globalCatMouseLock);
   if (debug) kprintf("Mouse finished eating at bowl %d\n", bowl);
   bowlStatus[bowl] = 'U'; // mouse finished eating
-  miceEating--;
   lock_release(bowlLocks[bowl]);
-  if (miceEating == 0)   // Check if this was the last mouse
-    cv_signal(cv_can_eat, globalCatMouseLock); // Alert the hungry cats
+  lock_acquire(globalCatMouseLock);
+  miceEating--;
+     // Check if this was the last mouse
+  cv_broadcast(cv_can_eat, globalCatMouseLock); // Alert the hungry cats
   lock_release(globalCatMouseLock);
 }
