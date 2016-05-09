@@ -21,6 +21,7 @@ static int miceWaiting; // keep track of how many mice are hungry
 static int catsEating;  // keep track of how many cats are eating
 static int miceEating;  // keep track of how many mice are eating
 
+static struct cv **bowlCVs;
 static struct lock **bowlLocks; // one lock for each bowl that is created
 static volatile char *bowlStatus; // keeps status of the bowl:
                                   // M: mouse is eating
@@ -61,10 +62,13 @@ catmouse_sync_init(int bowls) {
   numBowls = bowls;
   bowlStatus = kmalloc(bowls * sizeof(char)); // Allocate mem
   bowlLocks = kmalloc(bowls * sizeof(struct lock)); // bollocks
+  bowlCVs = kmalloc(bowls * sizeof(struct cv)); // bollocks
   int i = 0;
   for (; i < numBowls; i++) {
     bowlStatus[i] = 'U';  // Init to unused
     bowlLocks[i] = lock_create("bowl" + i);  // make locks for each bowl
+    bowlCVs[i] = cv_create("bowlcv" + i);   // make CVs for each bowl to wake up
+                                            // same-type animals waiting for same bowl
   }
 
   catsEating = 0;
@@ -89,9 +93,11 @@ catmouse_sync_cleanup(int bowls)
   KASSERT(cv_mouse != NULL); cv_destroy(cv_mouse);
 
   KASSERT(bowlLocks != NULL);
+  KASSERT(bowlCVs != NULL);
   int i = 0;
   for (; i < numBowls; i++) {
     lock_destroy(bowlLocks[i]);
+    cv_destroy(bowlCVs[i]);
   }
 
   if (bowlStatus != NULL) {
@@ -120,21 +126,24 @@ cat_before_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(globalCatMouseLock); // Grab the mutex
-  while (miceEating > 0 || bowlStatus[bowl] == 'C') {   // While there is a mouse eating
-                                                        // OR there is another cat at this bowl
-    if (debug) { // Debug info
-      if (miceEating > 0) kprintf("Cat waiting at bowl %d: mouse is eating right now! \n", bowl);
-      if (bowlStatus[bowl] == 'C') kprintf("Cat waiting at bowl %d: cat is eating at this bowl right now! \n", bowl);
-    }
+  while (miceEating > 0) {   // While there is a mouse eating
+    if (debug) kprintf("Cat waiting at bowl %d: mouse is eating right now! \n", bowl + 1);
     cv_wait(cv_cat, globalCatMouseLock);  // conditionally release mutex
-                                          // until we are allowed to feed this cat
+                                          // until cats are allowed to eat
   }
-  lock_acquire(bowlLocks[bowl]);  // reserve this table for the cat
-  if (debug) kprintf("Cat started eating at bowl %d\n", bowl);
+  lock_release(globalCatMouseLock);
+
+  lock_acquire(bowlLocks[bowl]);  // get in line for this bowl
+  while (bowlStatus[bowl] == 'C') { // while there is another cat at this bowl
+    if (debug) kprintf("Cat waiting at bowl %d: cat is eating at this bowl right now! \n", bowl + 1);
+    cv_wait(bowlCVs[bowl], globalCatMouseLock);   // conditionally release mutex
+                                                  // until this bowl is open
+  }
+
+  if (debug) kprintf("Cat started eating at bowl %d\n", bowl + 1);
   bowlStatus[bowl] = 'C';         // dinner is served
   catsEating++;
-  lock_release(bowlLocks[bowl]);  // table secured, go ahead and release the lock while the cat chows down
-  lock_release(globalCatMouseLock);
+  lock_release(bowlLocks[bowl]);  // let another cat get in line
 }
 
 /*
@@ -155,14 +164,17 @@ cat_after_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(bowlLocks[bowl]);
-  if (debug) kprintf("Cat finished eating at bowl %d\n", bowl);
+  if (debug) kprintf("Cat finished eating at bowl %d\n", bowl + 1);
   bowlStatus[bowl] = 'U'; // cat finished eating
   catsEating--;
+  cv_broadcast(bowlCVs[bowl], globalCatMouseLock);
   lock_release(bowlLocks[bowl]);
 
   lock_acquire(globalCatMouseLock);
-  if (catsEating == 0)   // Check if this was the last cat
+  if (catsEating == 0) {  // Check if this was the last cat
     cv_broadcast(cv_mouse, globalCatMouseLock); // Alert the hungry mice
+    kprintf("Last cat finished eating!\n");
+  }
   lock_release(globalCatMouseLock);
 
 }
@@ -184,22 +196,23 @@ mouse_before_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(globalCatMouseLock); // Grab the mutex
-  while (catsEating > 0 || bowlStatus[bowl] == 'M') {   // While there is a cat eating
-                                                        // OR another mouse at this bowl
-    if (debug) { // Debug info
-      if (catsEating > 0) kprintf("Mouse waiting at bowl %d: cat is eating right now! \n", bowl);
-      if (bowlStatus[bowl] == 'M') kprintf("Mouse waiting at bowl %d: mouse is eating at this bowl right now! \n", bowl);
-    }
-
+  while (catsEating > 0) {   // While there is a cat eating
+    if (debug) kprintf("Mouse waiting at bowl %d: cat is eating right now! \n", bowl + 1);
     cv_wait(cv_mouse, globalCatMouseLock);  // conditionally release mutex
-                                            // until we are allowed to feed this mouse
+                                            // until mice are allowed to eat
   }
-  lock_acquire(bowlLocks[bowl]);  // reserve this table for the mouse
+  lock_release(globalCatMouseLock);
+
+  lock_acquire(bowlLocks[bowl]);  // get in line for this bowl
+  while (bowlStatus[bowl] == 'M') { // while there is another mouse at this bowl
+    if (debug) kprintf("Mouse waiting at bowl %d: mouse is eating at this bowl right now! \n", bowl + 1);
+    cv_wait(bowlCVs[bowl], globalCatMouseLock);   // conditionally release mutex
+                                                  // until this bowl is open
+  }
   if (debug) kprintf("Mouse started eating at bowl %d\n", bowl);
   bowlStatus[bowl] = 'M';         // dinner is served
   miceEating++;
-  lock_release(bowlLocks[bowl]);  // table secured, go ahead and release the lock while the mouse chows down
-  lock_release(globalCatMouseLock);
+  lock_release(bowlLocks[bowl]);  // let another mouse get in line
 }
 
 /*
@@ -220,13 +233,16 @@ mouse_after_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
 
   lock_acquire(bowlLocks[bowl]);
-  if (debug) kprintf("Mouse finished eating at bowl %d\n", bowl);
+  if (debug) kprintf("Mouse finished eating at bowl %d\n", bowl + 1);
   bowlStatus[bowl] = 'U'; // mouse finished eating
   miceEating--;
+  cv_broadcast(bowlCVs[bowl], globalCatMouseLock);
   lock_release(bowlLocks[bowl]);
 
   lock_acquire(globalCatMouseLock);
-  if (miceEating == 0)   // Check if this was the last mouse
+  if (miceEating == 0) {  // Check if this was the last mouse
     cv_broadcast(cv_cat, globalCatMouseLock); // Alert the hungry cats
+    kprintf("Last mouse finished eating!\n");
+  }
   lock_release(globalCatMouseLock);
 }
