@@ -175,9 +175,8 @@ lock_create(const char *name)
                 return NULL;
         }
 
-        lock -> holder = NULL; // Init lock holder to nobody
-        lock -> held = false;     // Init the holder to nobody
         spinlock_init(&lock -> slock);  // init the spinlock
+        lock -> holder = NULL; // Init lock holder to nobody
 
         return lock;
 }
@@ -200,15 +199,13 @@ lock_acquire(struct lock *lock)
         KASSERT(curthread -> t_in_interrupt == false);
 
 	      spinlock_acquire(&lock -> slock);  // Acquire the spinlock
-        while (lock -> held == true) {  // If the lock is currently held...
+        while (lock -> holder != NULL) {  // If the lock is currently held...
 		        wchan_lock(lock -> lk_wchan);
 		        spinlock_release(&lock -> slock); // Keep spinning
             wchan_sleep(lock -> lk_wchan);
             spinlock_acquire(&lock -> slock); // Keep spinning
         }
 
-        KASSERT(lock -> held == false); // Test if the lock is held in this atomic moment
-        lock -> held = true;  // Grab it
         lock -> holder = curthread;
 	      spinlock_release(&lock -> slock);  // Stop spinning
 }
@@ -217,16 +214,10 @@ void
 lock_release(struct lock *lock)
 {
       KASSERT(lock != NULL);
-      // I dont hold this lock
-      if (!lock_do_i_hold(lock)) {
-          return;
-      }
-
+      KASSERT(lock_do_i_hold(lock) == true);
       spinlock_acquire(&lock -> slock); // Grab a spinlock
-      KASSERT(lock -> held == true);  // Make sure we're holding the lock in this atomic moment
-      lock -> held = false;
-      wchan_wakeone(lock -> lk_wchan); // Wake up someone waiting
       lock -> holder = NULL;
+      wchan_wakeone(lock -> lk_wchan); // Wake up someone waiting
       spinlock_release(&lock -> slock); // release our spinlock
 
 }
@@ -234,7 +225,6 @@ lock_release(struct lock *lock)
 bool  // Quick checker to see if the thread holds a particular lock
 lock_do_i_hold(struct lock *lock)
 {
-        KASSERT(lock != NULL);
         if (lock -> holder == curthread) return true;
         else return false;
 }
@@ -243,6 +233,7 @@ lock_do_i_hold(struct lock *lock)
 
 struct lock*
 lock_create(const char *name) {
+  kprintf("why are you here?\n");
   struct lock *lock;
 
   lock = kmalloc(sizeof(struct lock));

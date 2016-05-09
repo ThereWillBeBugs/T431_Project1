@@ -77,9 +77,9 @@ void V(struct semaphore *);
 #if OPT_A1
 struct lock {
         char *lk_name;
-        volatile bool held;
+        //volatile bool held;
 
-        struct thread *holder;
+        volatile struct thread *holder;
         struct wchan *lk_wchan;
         struct spinlock slock;
 };
