@@ -7,8 +7,8 @@
 
 /*  SYNC VARIABLES */
 static struct lock* globalCatMouseLock; // global starter lock
-static struct cv* cv_cat; // cat synch
-static struct cv* cv_mouse; // mouse synch
+static struct cv* cv_cat; // control: cat allowed to eat
+static struct cv* cv_mouse; // control: mouse allowed to eat
 
 // Adding all logical variables right now... can trim back as needed
 static int numBowls;  // Keep track of total bowls
@@ -26,12 +26,13 @@ static volatile char* bowlStatus; // keeps status of the bowl:
                                   // U: bowl is unused
 
 // Method declarations
-void catmouse_sync_init(int bowls);
-void catmouse_sync_cleanup(int bowls);
-void cat_before_eating(unsigned int bowl);
-void cat_after_eating(unsigned int bowl);
-void mouse_before_eating(unsigned int bowl);
-void mouse_after_eating(unsigned int bowl);
+void catmouse_sync_init(int);
+void catmouse_sync_cleanup(int);
+void cat_before_eating(unsigned int);
+void cat_after_eating(unsigned int);
+void mouse_before_eating(unsigned int);
+void mouse_after_eating(unsigned int);
+bool isEating(char);
 
 /*
  * The CatMouse simulation will call this function once before any cat or
@@ -116,6 +117,23 @@ catmouse_sync_cleanup(int bowls)
 void
 cat_before_eating(unsigned int bowl) {
   bowl -= 1; // off by one prevention
+
+  lock_acquire(globalCatMouseLock); // Grab the mutex
+  while (isEating('M') || bowlStatus[bowl] == 'C') {  // While there is a mouse eating
+                                                      // OR another cat is eating here
+
+    if (debug) { // Debug info
+      if (isEating('M')) kprintf("Cat waiting at bowl %d: mouse is eating right now", bowl);
+      if (bowlStatus[bowl] == 'C') kprintf("Cat waiting at bowl %d: cat is eating at this bowl right now", bowl);
+    }
+
+    cv_wait(cv_cat, globalCatMouseLock);  // conditionally release mutex
+                                          // until we are allowed to feed this cat
+  }
+  lock_acquire(bowlLocks[bowl]);  // reserve this table for the cat
+  bowlStatus[bowl] = 'C';         // dinner is served
+  lock_release(bowlLocks[bowl]);  // table secured, go ahead and release the lock while the cat chows down
+  lock_release(globalCatMouseLock);
 }
 
 /*
@@ -133,8 +151,8 @@ cat_before_eating(unsigned int bowl) {
 
 void
 cat_after_eating(unsigned int bowl) {
-  /* replace this default implementation with your own implementation of cat_after_eating */
-  (void)bowl;  /* keep the compiler from complaining about an unused parameter */
+  bowl -= 1; // off by one prevention
+
 }
 
 /*
@@ -172,4 +190,20 @@ void
 mouse_after_eating(unsigned int bowl) {
   /* replace this default implementation with your own implementation of mouse_after_eating */
   (void)bowl;  /* keep the compiler from complaining about an unused parameter */
+}
+
+/**
+ * Check to see if a certain animal is eating right now
+ *
+ */
+bool
+isEating(char animal) {
+  int i = 0;
+  for (; i < numBowls; i++) {
+    if (bowlStatus[i] == animal) {  // found this animal in the kitchen
+      return true;
+    }
+  }
+
+  return false; // time for me to eat
 }
